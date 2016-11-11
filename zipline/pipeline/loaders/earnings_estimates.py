@@ -289,7 +289,35 @@ class EarningsEstimatesLoader(PipelineLoader):
                                    columns,
                                    all_adjustments_for_sid,
                                    sid):
+        """
+        Given a sid, collect all overwrites that should be applied for this
+        sid at each quarter boundary.
 
+        Parameters
+        ----------
+        group : pd.DataFrame
+            The data for `sid`.
+        dates : pd.DatetimeIndex
+            The calendar dates for which estimates data is requested.
+        requested_qtr_data : pd.DataFrame
+            The DataFrame with the latest values for the requested quarter
+            for all columns.
+        last_per_qtr : pd.DataFrame
+            A DataFrame with a column MultiIndex of [self.estimates.columns,
+            normalized_quarters, sid] that allows easily getting the timeline
+            of estimates for a particular sid for a particular quarter.
+        sid_to_idx : dict[int -> int]
+            A dictionary of sid to the sid's index in the asset index.
+        columns : list of BoundColumn
+            The columns for which the overwrites should be computed.
+        all_adjustments_for_sid : dict[int -> AdjustedArray]
+            A dictionary of the integer index of each timestamp into the date
+            index, mapped to adjustments that should be applied at that
+            index for the given sid (`sid`). This dictionary is modified as
+            adjustments are collected.
+        sid : int
+            The sid for which overwrites should be computed.
+        """
         next_qtr_start_indices = dates.searchsorted(
             group[EVENT_DATE_FIELD_NAME].values,
             side=self.searchsorted_side,
@@ -320,15 +348,42 @@ class EarningsEstimatesLoader(PipelineLoader):
                     columns
                 )
 
-    def collect_adjustments(self,
-                            group,
-                            dates,
-                            requested_qtr_data,
-                            last_per_qtr,
-                            sid_to_idx,
-                            columns,
-                            col_to_all_adjustments,
-                            **kwargs):
+    def get_adjustments_for_sid(self,
+                                group,
+                                dates,
+                                requested_qtr_data,
+                                last_per_qtr,
+                                sid_to_idx,
+                                columns,
+                                col_to_all_adjustments,
+                                **kwargs):
+        """
+
+        Parameters
+        ----------
+        group : pd.DataFrame
+            The data for the given sid.
+        dates : pd.DatetimeIndex
+            The calendar dates for which estimates data is requested.
+        requested_qtr_data : pd.DataFrame
+            The DataFrame with the latest values for the requested quarter
+            for all columns.
+        last_per_qtr : pd.DataFrame
+            A DataFrame with a column MultiIndex of [self.estimates.columns,
+            normalized_quarters, sid] that allows easily getting the timeline
+            of estimates for a particular sid for a particular quarter.
+        sid_to_idx : dict[int -> int]
+            A dictionary of sid to the sid's index in the asset index.
+        columns : list of BoundColumn
+            The columns for which the overwrites should be computed.
+        col_to_all_adjustments : dict[int -> AdjustedArray]
+            A dictionary of the integer index of each timestamp into the date
+            index, mapped to adjustments that should be applied at that
+            index. This dictionary is for adjustments for ALL sids. It is
+            modified as adjustments are collected.
+        kwargs :
+            Additional arguments used in collecting adjustments; unused here.
+        """
         # Collect all adjustments for a given sid.
         all_adjustments_for_sid = {}
         sid = int(group.name)
@@ -343,13 +398,22 @@ class EarningsEstimatesLoader(PipelineLoader):
         self.merge_into_adjustments_for_all_sids(
             all_adjustments_for_sid, col_to_all_adjustments
         )
-        return sid, all_adjustments_for_sid
 
-
-    def merge_into_adjustments_for_all_sids(self, all_adjustments_for_sid,
+    def merge_into_adjustments_for_all_sids(self,
+                                            all_adjustments_for_sid,
                                             col_to_all_adjustments):
-        # Merge adjustments for this sid into the dictionary containing
-        # adjustments for all sids.
+        """
+        Merge adjustments for a particular sid into a dictionary containing
+        adjustments for all sids.
+
+        Parameters
+        ----------
+        all_adjustments_for_sid : dict[int -> AdjustedArray]
+            All adjustments for a particular sid.
+        col_to_all_adjustments : dict[int -> AdjustedArray]
+            All adjustments for all sids.
+        """
+
         for col_name in all_adjustments_for_sid:
             if col_name not in col_to_all_adjustments:
                 col_to_all_adjustments[col_name] = {}
@@ -359,7 +423,6 @@ class EarningsEstimatesLoader(PipelineLoader):
                                     adjs,
                                     col_name,
                                     ts)
-
 
     def get_adjustments(self,
                         zero_qtr_data,
@@ -389,11 +452,15 @@ class EarningsEstimatesLoader(PipelineLoader):
             An index of all the assets from the raw data.
         columns : list of BoundColumn
             The columns for which adjustments need to be calculated.
+        kwargs :
+            Additional keyword arguments that should be forwarded to
+            `get_adjustments_for_sid` and to be used in computing adjustments
+            for each sid.
 
         Returns
         -------
-        adjusted_array : AdjustedArray
-            The array of data and overwrites for the given column.
+        col_to_all_adjustments : dict[int -> AdjustedArray]
+            A dictionary of all adjustments that should be applied.
         """
 
         zero_qtr_data.sort_index(inplace=True)
@@ -407,7 +474,7 @@ class EarningsEstimatesLoader(PipelineLoader):
         col_to_all_adjustments = {}
         sid_to_idx = dict(zip(assets, range(len(assets))))
         quarter_shifts.groupby(level=SID_FIELD_NAME).apply(
-            self.collect_adjustments,
+            self.get_adjustments_for_sid,
             dates,
             requested_qtr_data,
             last_per_qtr,
@@ -484,7 +551,6 @@ class EarningsEstimatesLoader(PipelineLoader):
             else:
                 adjs = [self.overwrite_with_null(
                         col,
-                        last_per_qtr.index,
                         next_qtr_start_idx,
                         sid_idx)]
                 add_new_adjustments(col_to_overwrites,
@@ -494,7 +560,6 @@ class EarningsEstimatesLoader(PipelineLoader):
 
     def overwrite_with_null(self,
                             column,
-                            dates,
                             next_qtr_start_idx,
                             sid_idx):
         return self.scalar_overwrites_dict[column.dtype](
@@ -724,7 +789,6 @@ class PreviousEarningsEstimatesLoader(EarningsEstimatesLoader):
                                       split_dict=None):
         return [self.overwrite_with_null(
             column,
-            dates,
             next_qtr_start_idx,
             sid_idx,
         )]
@@ -795,7 +859,7 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
         of dates up to and including the split_adjusted_asof date. All
         adjustments occurring during this first half are applied  to all
         dates in this first half. The second half is the set of dates after
-        the split_adjusted_asof date. All adjustments occuring during this
+        the split_adjusted_asof date. All adjustments occurring during this
         second half are applied sequentially as they appear in the timeline.
     """
     def __init__(self,
@@ -829,17 +893,26 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
                                   requested_split_adjusted_columns):
         raise NotImplementedError('collect_split_adjustments')
 
-    def collect_adjustments(self,
-                            group,
-                            dates,
-                            requested_qtr_data,
-                            last_per_qtr,
-                            sid_to_idx,
-                            columns,
-                            col_to_all_adjustments,
-                            split_adjusted_asof_idx=None,
-                            requested_split_adjusted_columns_for_group=None):
-        # Collect all adjustments for a given sid.
+    def get_adjustments_for_sid(self,
+                                group,
+                                dates,
+                                requested_qtr_data,
+                                last_per_qtr,
+                                sid_to_idx,
+                                columns,
+                                col_to_all_adjustments,
+                                split_adjusted_asof_idx=None,
+                                split_adjusted_cols_for_group=None):
+        """
+        Collects both overwrites and adjustments for a particular sid.
+
+        Parameters
+        ----------
+        split_adjusted_asof_idx : int
+            The integer index of the date on which the data was split-adjusted.
+        split_adjusted_cols_for_group : list of str
+            The names of requested columns that should also be split-adjusted.
+        """
         all_adjustments_for_sid = {}
         sid = int(group.name)
         self.collect_overwrites_for_sid(group,
@@ -851,7 +924,7 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
                                         all_adjustments_for_sid,
                                         sid)
         (pre_adjustments,
-         post_adjustments) = self.retrieve_adjustments_for_sid(
+         post_adjustments) = self.retrieve_split_adjustment_data_for_sid(
             dates, sid, split_adjusted_asof_idx
         )
         sid_estimates = self.estimates[
@@ -860,7 +933,7 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
         # We might not have any overwrites but still have
         # adjustments, and we will need to manually add columns if
         # that is the case.
-        for col_name in requested_split_adjusted_columns_for_group:
+        for col_name in split_adjusted_cols_for_group:
             if col_name not in all_adjustments_for_sid:
                 all_adjustments_for_sid[col_name] = {}
 
@@ -874,12 +947,11 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
             split_adjusted_asof_idx,
             pre_adjustments,
             post_adjustments,
-            requested_split_adjusted_columns_for_group
+            split_adjusted_cols_for_group
         )
         self.merge_into_adjustments_for_all_sids(
             all_adjustments_for_sid, col_to_all_adjustments
         )
-
 
     def get_adjustments(self,
                         zero_qtr_data,
@@ -889,8 +961,10 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
                         assets,
                         columns,
                         **kwargs):
-
-        requested_split_adjusted_columns_for_group = [
+        """
+        Calculates both split adjustments and overwrites for all sids.
+        """
+        split_adjusted_cols_for_group = [
             self.name_map[col.name]
             for col in columns
             if self.name_map[col.name] in self._split_adjusted_column_names
@@ -906,8 +980,7 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
             dates,
             assets,
             columns,
-            requested_split_adjusted_columns_for_group=
-            requested_split_adjusted_columns_for_group,
+            split_adjusted_cols_for_group=split_adjusted_cols_for_group,
             split_adjusted_asof_idx=split_adjusted_asof_idx
         )
 
@@ -1131,10 +1204,10 @@ class SplitAdjustedEstimatesLoader(EarningsEstimatesLoader):
 
         return col_to_split_adjustments
 
-    def retrieve_adjustments_for_sid(self,
-                                     dates,
-                                     sid,
-                                     split_adjusted_asof_idx):
+    def retrieve_split_adjustment_data_for_sid(self,
+                                               dates,
+                                               sid,
+                                               split_adjusted_asof_idx):
         """
         dates : pd.DatetimeIndex
             The calendar dates.

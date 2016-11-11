@@ -30,11 +30,11 @@ from zipline.pipeline.loaders.blaze.estimates import (
 from zipline.pipeline.loaders.earnings_estimates import (
     INVALID_NUM_QTRS_MESSAGE,
     NextEarningsEstimatesLoader,
+    NextSplitAdjustedEarningsEstimatesLoader,
     normalize_quarters,
     PreviousEarningsEstimatesLoader,
-    split_normalized_quarters,
     PreviousSplitAdjustedEarningsEstimatesLoader,
-    NextSplitAdjustedEarningsEstimatesLoader
+    split_normalized_quarters,
 )
 from zipline.testing.fixtures import (
     WithAdjustmentReader,
@@ -126,6 +126,9 @@ class WithEstimates(WithTradingSessions, WithAdjustmentReader):
         columns : dict[str -> str]
             The dictionary mapping the names of BoundColumns to the
             associated column name in the events DataFrame.
+    make_columns() -> dict[BoundColumn -> str]
+       Method which returns a dictionary of BoundColumns mapped to the
+       associated column names in the raw data.
     """
 
     # Short window defined in order for test to run faster.
@@ -273,7 +276,17 @@ options = ["split_adjustments_loader",
            "split_adjusted_asof"]
 
 
-class WithWrongSplitsLoaderDefinition(WithEstimates, ZiplineTestCase):
+class WrongSplitsLoaderDefinition(WithEstimates, ZiplineTestCase):
+    """
+    Test class that tests that loaders break correctly when incorrectly
+    instantiated.
+
+    Tests
+    -----
+    test_extra_splits_columns_passed(SplitAdjustedEstimatesLoader)
+        A test that checks that the loader correctly breaks when an
+        unexpected column is passed in the list of split-adjusted columns.
+    """
     @classmethod
     def init_class_fixtures(cls):
         super(WithEstimates, cls).init_class_fixtures()
@@ -923,7 +936,7 @@ class WithEstimateWindows(WithEstimates):
 
     Tests
     -----
-    test_estimate_windows_at_quarter_boundaries()
+    test_adjustments_with_multiple_adjusted_columns()
         Tests that we overwrite values with the correct quarter's estimate at
         the correct dates when we have a factor that asks for a window of data.
     """
@@ -1276,29 +1289,29 @@ class WithSplitAdjustedWindows(WithEstimateWindows):
         # order to test that we're reversing splits correctly in the previous
         # case (without an overwrite) and in the next case (with an overwrite).
         sid_30 = pd.DataFrame({
-                TS_FIELD_NAME: [cls.window_test_start_date,
-                                pd.Timestamp('2015-01-09'),
-                                # For Q2, we want it to start early enough
-                                # that we can have several adjustments before
-                                # the end of the first quarter so that we
-                                # can test un-adjusting & readjusting with an
-                                # overwrite.
-                                cls.window_test_start_date,
-                                # We want the Q2 event date to be enough past
-                                # the split-asof-date that we can have
-                                # several splits and can make sure that they
-                                # are applied correctly.
-                                pd.Timestamp('2015-01-20')],
-                EVENT_DATE_FIELD_NAME:
-                    [pd.Timestamp('2015-01-09'),
-                     pd.Timestamp('2015-01-09'),
-                     pd.Timestamp('2015-01-20'),
-                     pd.Timestamp('2015-01-20')],
-                'estimate': [130., 131., 230., 231.],
-                FISCAL_QUARTER_FIELD_NAME: [1] * 2 + [2] * 2,
-                FISCAL_YEAR_FIELD_NAME: 2015,
-                SID_FIELD_NAME: 30
-            })
+            TS_FIELD_NAME: [cls.window_test_start_date,
+                            pd.Timestamp('2015-01-09'),
+                            # For Q2, we want it to start early enough
+                            # that we can have several adjustments before
+                            # the end of the first quarter so that we
+                            # can test un-adjusting & readjusting with an
+                            # overwrite.
+                            cls.window_test_start_date,
+                            # We want the Q2 event date to be enough past
+                            # the split-asof-date that we can have
+                            # several splits and can make sure that they
+                            # are applied correctly.
+                            pd.Timestamp('2015-01-20')],
+            EVENT_DATE_FIELD_NAME:
+                [pd.Timestamp('2015-01-09'),
+                 pd.Timestamp('2015-01-09'),
+                 pd.Timestamp('2015-01-20'),
+                 pd.Timestamp('2015-01-20')],
+            'estimate': [130., 131., 230., 231.],
+            FISCAL_QUARTER_FIELD_NAME: [1] * 2 + [2] * 2,
+            FISCAL_YEAR_FIELD_NAME: 2015,
+            SID_FIELD_NAME: 30
+        })
 
         # An extra sid to test no splits before the split-adjusted-asof-date.
         # We want an event before and after the split-adjusted-asof-date &
@@ -1818,9 +1831,43 @@ class BlazeNextWithSplitAdjustedWindows(NextWithSplitAdjustedWindows):
         )
 
 
-class WithMultipleEstimateColumns(WithEstimates):
+class WithSplitAdjustedMultipleEstimateColumns(WithEstimates):
+    """
+    ZiplineTestCase mixin for having multiple estimate columns that are
+    split-adjusted to make sure that adjustments are applied correctly.
+
+    Attributes
+    ----------
+    test_start_date : pd.Timestamp
+        The start date of the test.
+    test_end_date : pd.Timestamp
+        The start date of the test.
+
+    Methods
+    -------
+    make_expected_timelines_1q_out -> dict[pd.Timestamp -> dict[str ->
+        np.array]]
+        The expected array of results for each date of the date range for
+        each column. Only for 1 quarter out.
+
+    make_expected_timelines_2q_out -> dict[pd.Timestamp -> dict[str ->
+        np.array]]
+        The expected array of results for each date of the date range. For 2
+        quarters out, so only for the column that is requested to be loaded
+        with 2 quarters out.
+
+    Tests
+    -----
+    test_adjustments_with_multiple_adjusted_columns
+        Tests that if you have multiple columns, we still split-adjust
+        correctly.
+
+    test_multiple_datasets_different_num_announcements
+        Tests that if you have multiple datasets that ask for a different
+        number of quarters out, and each asks for a different estimates column,
+        we still split-adjust correctly.
+    """
     END_DATE = pd.Timestamp('2015-02-10')
-    window_test_start_date = pd.Timestamp('2015-01-05')
     test_start_date = pd.Timestamp('2015-01-09', tz='utc')
     test_end_date = pd.Timestamp('2015-01-12', tz='utc')
 
@@ -1839,8 +1886,8 @@ class WithMultipleEstimateColumns(WithEstimates):
         return pd.DataFrame({
             # We only want a stale KD here so that adjustments
             # will be applied.
-            TS_FIELD_NAME: [cls.window_test_start_date,
-                            cls.window_test_start_date],
+            TS_FIELD_NAME: [pd.Timestamp('2015-01-05'),
+                            pd.Timestamp('2015-01-05')],
             EVENT_DATE_FIELD_NAME:
                 [pd.Timestamp('2015-01-09'),
                  pd.Timestamp('2015-01-12')],
@@ -1860,22 +1907,22 @@ class WithMultipleEstimateColumns(WithEstimates):
         }, index=[0])
 
     @classmethod
-    def make_expected_timelines1q_out(cls):
+    def make_expected_timelines_1q_out(cls):
         return {}
 
     @classmethod
-    def make_expected_timelines2q_out(cls):
+    def make_expected_timelines_2q_out(cls):
         return {}
 
     @classmethod
     def init_class_fixtures(cls):
-        super(WithMultipleEstimateColumns, cls).init_class_fixtures()
-        cls.timelines_1q_out = cls.make_expected_timelines1q_out()
-        cls.timelines_2q_out = cls.make_expected_timelines2q_out()
+        super(
+            WithSplitAdjustedMultipleEstimateColumns, cls
+        ).init_class_fixtures()
+        cls.timelines_1q_out = cls.make_expected_timelines_1q_out()
+        cls.timelines_2q_out = cls.make_expected_timelines_2q_out()
 
-    def test_estimate_windows_at_quarter_boundaries(self):
-        # Testing that if you have multiple columns, you can split-adjust
-        # correctly.
+    def test_adjustments_with_multiple_adjusted_columns(self):
         dataset = MultipleColumnsQuartersEstimates(1)
         timelines = self.timelines_1q_out
         window_len = 3
@@ -1901,9 +1948,6 @@ class WithMultipleEstimateColumns(WithEstimates):
         )
 
     def test_multiple_datasets_different_num_announcements(self):
-        # Testing that if you have multiple datasets that ask for a different
-        # number of quarters out, and each asks for a different estimates
-        # column, you get split-adjust correctly.
         dataset1 = MultipleColumnsQuartersEstimates(1)
         dataset2 = MultipleColumnsQuartersEstimates(2)
         timelines_1q_out = self.timelines_1q_out
@@ -1941,8 +1985,9 @@ class WithMultipleEstimateColumns(WithEstimates):
         )
 
 
-class PreviousWithMultipleEstimateColumns(WithMultipleEstimateColumns,
-                                          ZiplineTestCase):
+class PreviousWithSplitAdjustedMultipleEstimateColumns(
+    WithSplitAdjustedMultipleEstimateColumns, ZiplineTestCase
+):
     @classmethod
     def make_loader(cls, events, columns):
         return PreviousSplitAdjustedEarningsEstimatesLoader(
@@ -1954,7 +1999,7 @@ class PreviousWithMultipleEstimateColumns(WithMultipleEstimateColumns,
         )
 
     @classmethod
-    def make_expected_timelines1q_out(cls):
+    def make_expected_timelines_1q_out(cls):
         return {
             pd.Timestamp('2015-01-09', tz='utc'): {
                 'estimate1': np.array([[np.NaN]] * 2 + [[3300.]]),
@@ -1967,7 +2012,7 @@ class PreviousWithMultipleEstimateColumns(WithMultipleEstimateColumns,
         }
 
     @classmethod
-    def make_expected_timelines2q_out(cls):
+    def make_expected_timelines_2q_out(cls):
         return {
             pd.Timestamp('2015-01-09', tz='utc'): {
                 'estimate2': np.array([[np.NaN]] * 3)
@@ -1979,7 +2024,7 @@ class PreviousWithMultipleEstimateColumns(WithMultipleEstimateColumns,
 
 
 class BlazePreviousWithMultipleEstimateColumns(
-    PreviousWithMultipleEstimateColumns
+    PreviousWithSplitAdjustedMultipleEstimateColumns
 ):
     @classmethod
     def make_loader(cls, events, columns):
@@ -1992,8 +2037,9 @@ class BlazePreviousWithMultipleEstimateColumns(
         )
 
 
-class NextWithMultipleEstimateColumns(WithMultipleEstimateColumns,
-                                      ZiplineTestCase):
+class NextWithSplitAdjustedMultipleEstimateColumns(
+    WithSplitAdjustedMultipleEstimateColumns, ZiplineTestCase
+):
     @classmethod
     def make_loader(cls, events, columns):
         return NextSplitAdjustedEarningsEstimatesLoader(
@@ -2005,7 +2051,7 @@ class NextWithMultipleEstimateColumns(WithMultipleEstimateColumns,
         )
 
     @classmethod
-    def make_expected_timelines1q_out(cls):
+    def make_expected_timelines_1q_out(cls):
         return {
             pd.Timestamp('2015-01-09', tz='utc'): {
                 'estimate1': np.array([[3300.]] * 3),
@@ -2018,7 +2064,7 @@ class NextWithMultipleEstimateColumns(WithMultipleEstimateColumns,
         }
 
     @classmethod
-    def make_expected_timelines2q_out(cls):
+    def make_expected_timelines_2q_out(cls):
         return {
             pd.Timestamp('2015-01-09', tz='utc'): {
                 'estimate2': np.array([[6600.]] * 3)
@@ -2029,7 +2075,9 @@ class NextWithMultipleEstimateColumns(WithMultipleEstimateColumns,
         }
 
 
-class BlazeNextWithMultipleEstimateColumns(NextWithMultipleEstimateColumns):
+class BlazeNextWithMultipleEstimateColumns(
+    NextWithSplitAdjustedMultipleEstimateColumns
+):
     @classmethod
     def make_loader(cls, events, columns):
         return BlazeNextSplitAdjustedEstimatesLoader(
@@ -2042,24 +2090,43 @@ class BlazeNextWithMultipleEstimateColumns(NextWithMultipleEstimateColumns):
 
 
 class WithAdjustmentBoundaries(WithEstimates):
+    """
+    ZiplineTestCase mixin providing class-level attributes, methods,
+    and a test to make sure that when the split-adjusted-asof-date is not
+    strictly within the date index, we can still apply adjustments correctly.
+
+    Attributes
+    ----------
+    split_adjusted_before_start : pd.Timestamp
+        A split-adjusted-asof-date before the start date of the test.
+    split_adjusted_after_end : pd.Timestamp
+        A split-adjusted-asof-date before the end date of the test.
+    split_adjusted_asof_dates : list of tuples of pd.Timestamp
+        All the split-adjusted-asof-dates over which we want to parameterize
+        the test.
+
+    Methods
+    -------
+    make_expected_out -> dict[pd.Timestamp -> pd.DataFrame]
+        A dictionary of the expected output of the pipeline at each of the
+        dates of interest.
+    """
     START_DATE = pd.Timestamp('2015-01-04')
     # We want to run the pipeline starting from `START_DATE`, but the
     # pipeline results will start from the next day, which is
     # `test_start_date`.
     test_start_date = pd.Timestamp('2015-01-05')
     END_DATE = test_end_date = pd.Timestamp('2015-01-12')
-    split_adjusted_at_start = test_start_date.tz_localize(None)
-    split_adjusted_at_end = test_end_date.tz_localize(None)
     split_adjusted_before_start = (
         test_start_date - timedelta(days=1)
-    ).tz_localize(None)
+    )
     split_adjusted_after_end = (
         test_end_date + timedelta(days=1)
-    ).tz_localize(None)
+    )
     # Must parametrize over this because there can only be 1 such date for
     # each set of data.
-    split_adjusted_asof_dates = [(split_adjusted_at_start,),
-                                 (split_adjusted_at_end,),
+    split_adjusted_asof_dates = [(test_start_date,),
+                                 (test_end_date,),
                                  (split_adjusted_before_start,),
                                  (split_adjusted_after_end,)]
 
@@ -2210,50 +2277,55 @@ class PreviousWithAdjustmentBoundaries(WithAdjustmentBoundaries,
 
     @classmethod
     def make_expected_out(cls):
-        start_date = cls.test_start_date.tz_localize(None)
-        end_date = cls.test_end_date.tz_localize(None)
         split_adjusted_at_start_boundary = pd.concat([
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s0,
                 'estimate': np.NaN,
             }, index=pd.date_range(
-                start_date, pd.Timestamp('2015-01-08'), tz='utc'
+                cls.test_start_date,
+                pd.Timestamp('2015-01-08'),
+                tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s0,
                 'estimate': 10.,
             }, index=pd.date_range(
-                pd.Timestamp('2015-01-09'), end_date, tz='utc'
+                pd.Timestamp('2015-01-09'), cls.test_end_date, tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s1,
                 'estimate': 11.,
-            }, index=pd.date_range(start_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_start_date, cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s2,
                 'estimate': np.NaN
-            }, index=pd.date_range(start_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_start_date,
+                                   cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s3,
                 'estimate': np.NaN
             }, index=pd.date_range(
-                start_date, end_date - timedelta(1), tz='utc'
+                cls.test_start_date, cls.test_end_date - timedelta(1), tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s3,
                 'estimate': 13. * .13
-            }, index=pd.date_range(end_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_end_date,
+                                   cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s4,
                 'estimate': np.NaN
             }, index=pd.date_range(
-                start_date, end_date - timedelta(2), tz='utc'
+                cls.test_start_date, cls.test_end_date - timedelta(2), tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s4,
                 'estimate': 14. * .15
             }, index=pd.date_range(
-                end_date - timedelta(1), end_date, tz='utc'
+                cls.test_end_date - timedelta(1), cls.test_end_date, tz='utc'
             )),
         ]).set_index(SID_FIELD_NAME, append=True).unstack(
             SID_FIELD_NAME).reindex(cls.trading_days).stack(
@@ -2264,42 +2336,50 @@ class PreviousWithAdjustmentBoundaries(WithAdjustmentBoundaries,
                 SID_FIELD_NAME: cls.s0,
                 'estimate': np.NaN,
             }, index=pd.date_range(
-                start_date, pd.Timestamp('2015-01-08'), tz='utc'
+                cls.test_start_date, pd.Timestamp('2015-01-08'), tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s0,
                 'estimate': 10.,
             }, index=pd.date_range(
-                pd.Timestamp('2015-01-09'), end_date, tz='utc'
+                pd.Timestamp('2015-01-09'), cls.test_end_date, tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s1,
                 'estimate': 11.,
-            }, index=pd.date_range(start_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_start_date,
+                                   cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s2,
                 'estimate': np.NaN
-            }, index=pd.date_range(start_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_start_date,
+                                   cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s3,
                 'estimate': np.NaN
             }, index=pd.date_range(
-                start_date, end_date - timedelta(1), tz='utc'
+                cls.test_start_date, cls.test_end_date - timedelta(1), tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s3,
                 'estimate': 13.
-            }, index=pd.date_range(end_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_end_date,
+                                   cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s4,
                 'estimate': np.NaN
             }, index=pd.date_range(
-                start_date, end_date - timedelta(2), tz='utc'
+                cls.test_start_date, cls.test_end_date - timedelta(2), tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s4,
                 'estimate': 14.
-            }, index=pd.date_range(end_date - timedelta(1), end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_end_date - timedelta(1),
+                                   cls.test_end_date,
+                                   tz='utc')),
         ]).set_index(SID_FIELD_NAME, append=True).unstack(
             SID_FIELD_NAME).reindex(cls.trading_days).stack(SID_FIELD_NAME,
                                                             dropna=False)
@@ -2307,11 +2387,11 @@ class PreviousWithAdjustmentBoundaries(WithAdjustmentBoundaries,
         split_adjusted_before_start_boundary = split_adjusted_at_start_boundary
         split_adjusted_after_end_boundary = split_adjusted_at_end_boundary
 
-        return {cls.split_adjusted_at_start:
+        return {cls.test_start_date:
                 split_adjusted_at_start_boundary,
                 cls.split_adjusted_before_start:
                 split_adjusted_before_start_boundary,
-                cls.split_adjusted_at_end:
+                cls.test_end_date:
                 split_adjusted_at_end_boundary,
                 cls.split_adjusted_after_end:
                 split_adjusted_after_end_boundary}
@@ -2339,34 +2419,38 @@ class NextWithAdjustmentBoundaries(WithAdjustmentBoundaries,
 
     @classmethod
     def make_expected_out(cls):
-        start_date = cls.test_start_date.tz_localize(None)
-        end_date = cls.test_end_date.tz_localize(None)
         split_adjusted_at_start_boundary = pd.concat([
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s0,
                 'estimate': 10,
             }, index=pd.date_range(
-                start_date, pd.Timestamp('2015-01-09'), tz='utc'
+                cls.test_start_date, pd.Timestamp('2015-01-09'), tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s1,
                 'estimate': 11.,
-            }, index=pd.date_range(start_date, start_date, tz='utc')),
+            }, index=pd.date_range(cls.test_start_date,
+                                   cls.test_start_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s2,
                 'estimate': 12.,
-            }, index=pd.date_range(end_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_end_date,
+                                   cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s3,
                 'estimate': 13. * .13,
             }, index=pd.date_range(
-                end_date - timedelta(1), end_date, tz='utc'
+                cls.test_end_date - timedelta(1), cls.test_end_date, tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s4,
                 'estimate': 14.,
             }, index=pd.date_range(
-                end_date - timedelta(1), end_date - timedelta(1), tz='utc'
+                cls.test_end_date - timedelta(1),
+                cls.test_end_date - timedelta(1),
+                tz='utc'
             )),
         ]).set_index(SID_FIELD_NAME, append=True).unstack(
             SID_FIELD_NAME).reindex(cls.trading_days).stack(
@@ -2377,27 +2461,33 @@ class NextWithAdjustmentBoundaries(WithAdjustmentBoundaries,
                 SID_FIELD_NAME: cls.s0,
                 'estimate': 10,
             }, index=pd.date_range(
-                start_date, pd.Timestamp('2015-01-09'), tz='utc'
+                cls.test_start_date, pd.Timestamp('2015-01-09'), tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s1,
                 'estimate': 11.,
-            }, index=pd.date_range(start_date, start_date, tz='utc')),
+            }, index=pd.date_range(cls.test_start_date,
+                                   cls.test_start_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s2,
                 'estimate': 12.,
-            }, index=pd.date_range(end_date, end_date, tz='utc')),
+            }, index=pd.date_range(cls.test_end_date,
+                                   cls.test_end_date,
+                                   tz='utc')),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s3,
                 'estimate': 13.,
             }, index=pd.date_range(
-                end_date - timedelta(1), end_date, tz='utc'
+                cls.test_end_date - timedelta(1), cls.test_end_date, tz='utc'
             )),
             pd.DataFrame({
                 SID_FIELD_NAME: cls.s4,
                 'estimate': 14.,
             }, index=pd.date_range(
-                end_date - timedelta(1), end_date - timedelta(1), tz='utc'
+                cls.test_end_date - timedelta(1),
+                cls.test_end_date - timedelta(1),
+                tz='utc'
             )),
         ]).set_index(SID_FIELD_NAME, append=True).unstack(
             SID_FIELD_NAME).reindex(cls.trading_days).stack(
@@ -2406,11 +2496,11 @@ class NextWithAdjustmentBoundaries(WithAdjustmentBoundaries,
         split_adjusted_before_start_boundary = split_adjusted_at_start_boundary
         split_adjusted_after_end_boundary = split_adjusted_at_end_boundary
 
-        return {cls.split_adjusted_at_start:
+        return {cls.test_start_date:
                 split_adjusted_at_start_boundary,
                 cls.split_adjusted_before_start:
                 split_adjusted_before_start_boundary,
-                cls.split_adjusted_at_end:
+                cls.test_end_date:
                 split_adjusted_at_end_boundary,
                 cls.split_adjusted_after_end:
                 split_adjusted_after_end_boundary}
